@@ -8,13 +8,15 @@ import threading
 import time
 from loguru import logger
 import concurrent.futures
+# from datetime import datetime, timedelta
 import datetime
-from datetime import timedelta
+from functools import partial
 
 from agentscope.agents import AgentBase
 from agentscope.message import Msg
 from agentscope.exception import (
     EnvListenerError,
+    ResponseParsingError,
 )
 from agentscope.environment import (
     Env,
@@ -224,7 +226,7 @@ class SocialMedia(BasicEnv):
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [
                 executor.submit(
-                    self.children[agent_name].post,
+                    self.children[agent_name].generate_post,
                     recent_posts=recent_posts,
                     current_time=current_time
                 )
@@ -284,8 +286,6 @@ class SocialMediaAgent(AgentBase):
 
     def __init__(  # pylint: disable=W0613
         self,
-        # name: str = None,
-        # sys_prompt: str = None,
         model_config_name: str = None,
         settings: dict = None,
         **kwargs: Any,
@@ -369,28 +369,38 @@ class SocialMediaAgent(AgentBase):
         super().speak(content)
         self.media.speak(content)
 
-    def parse_func(self, response: ModelResponse) -> ModelResponse:
-        lines = response.text.split('\n')
-        in_content = False
-        content = ''
-        timestamp = None
-        for line in lines:
-            if in_content or line.startswith("内容："):
-                in_content = True
-                if line.startswith("内容："):
-                    line = line[len("内容："):]
-                if content:
-                    content += '\n'
-                content += line
-            elif line.startswith("时间："):
-                timestamp = line[len("时间："):]
-        parsed = {
-            'timestamp': timestamp.strip(),
-            'content': content.strip(),
-        }
+    def parse_func(self, current_time: datetime.datetime, response: ModelResponse) -> ModelResponse:
+        # lines = response.text.split('\n')
+        # in_content = False
+        # content = ''
+        # timestamp = None
+        # for line in lines:
+        #     if in_content or line.startswith("内容："):
+        #         in_content = True
+        #         if line.startswith("内容："):
+        #             line = line[len("内容："):]
+        #         if content:
+        #             content += '\n'
+        #         content += line
+        #     elif line.startswith("时间："):
+        #         timestamp = line[len("时间："):]
+        # parsed = {
+        #     'timestamp': timestamp.strip(),
+        #     'content': content.strip(),
+        # }
+        # seconds = random.randint(0, 59)
+        # parsed['timestamp'] = parsed['timestamp'][:-2] + '%02d' % seconds
+        # logger.debug(f"response.text = {response.text} Parsed: {parsed}")
+        if len(response.text) > 140:
+            raise ResponseParsingError("回复超长: " + response.text + f" len(text) = {len(response.text)}")
+        minutes = random.randint(0, 59)
         seconds = random.randint(0, 59)
-        parsed['timestamp'] = parsed['timestamp'][:-2] + '%02d' % seconds
-        logger.debug(f"response.text = {response.text} Parsed: {parsed}")
+        time = current_time + datetime.timedelta(minutes=minutes, seconds=seconds)
+        time_str = time.strftime("%Y-%m-%d %H:%M:%S")
+        parsed = {
+            'timestamp': time_str,
+            'content': response.text,
+        }
         return ModelResponse(text=response.text, parsed=parsed)
 
     def reply(self, recent_posts: List[Msg] = [], current_time: str = "") -> Msg:
@@ -404,16 +414,16 @@ class SocialMediaAgent(AgentBase):
             # decide whether to speak
             # if len(recent_posts) == 0 or self._want_to_speak(media_info):
                 reply_hint = (
-                    r"请给予以上的朋友圈内容，生成一条合适的朋友圈。"
-                    r"生成要求如下：\n"
-                    rf"1. 现在的时间是{current_time}，生成的朋友圈时间在未来一小时以内。\n"
+                    r"请基于以上的朋友圈内容，生成一条合适的朋友圈。生成要求如下：\n"
+                    rf"1. 现在的时间是{current_time}，生成内容的时间需要发生在未来一小时以内，不得出现不合理的内容，比如上午8点时生成“下午好”或“晚上好”等内容，生成内容无需包含具体时间。\n"
                     r"2. 朋友圈内容需要符合人设，且符合当前朋友圈内容。\n"
                     r"3. 生成内容需要像日常聊天那样保持口语化、自然、流畅、简略，讲大白话。\n"
-                    r"4. 回复禁止超过六十字，讨论请围绕主题，接地气，可以加入适当的语气词表达情感。\n"
+                    r"4. 回复禁止超过140字，讨论请围绕主题，接地气，可以加入适当的语气词表达情感。\n"
                     r"5. 尽可能地避免使用特殊符号，例如：#、&、~等。\n"
-                    r"6. 请按照下面的格式进行生成：\n"
-                    r"时间：yyyy-MM-dd HH:mm:ss\n"
-                    r"内容：(符合人设的朋友圈文本)\n"
+                    r"请生成一条符合要求的朋友圈：\n"
+                    # r"6. 请按照下面的格式进行生成：\n"
+                    # r"时间：yyyy-MM-dd HH:mm:ss\n"
+                    # r"内容：(符合人设的朋友圈文本)\n"
                 )
             # else:
             #     return Msg(name="assistant", role="assistant", content="")
@@ -430,10 +440,11 @@ class SocialMediaAgent(AgentBase):
         )
         prompt[-1]["content"] = prompt[-1]["content"].strip()
         logger.debug(prompt)
+        current_time = datetime.datetime.strptime(current_time, "%Y-%m-%d %H:%M:%S")
         response = self.model(
             prompt,
-            parse_func=self.parse_func,
-            max_retries=3,
+            parse_func=partial(self.parse_func, current_time),
+            max_retries=5,
         )
         msg = Msg(name=self.name, content=response.parsed, role="assistant")
         if response:
