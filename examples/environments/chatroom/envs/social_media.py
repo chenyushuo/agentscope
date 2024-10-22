@@ -12,6 +12,8 @@ import concurrent.futures
 import datetime
 from functools import partial
 
+import numpy as np
+
 from agentscope.agents import AgentBase
 from agentscope.message import Msg
 from agentscope.exception import (
@@ -279,6 +281,22 @@ class Notifier(EventListener):
                 )
 
 
+INIT_FATIGUE = 0
+
+
+def is_daytime(time_str):
+    try:
+        timestamp = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+        hour = timestamp.hour
+        return 8 <= hour < 20
+    except ValueError:
+        return False
+
+
+def compute_probability(F, T=24, S=0.5):
+    return 1 / (1 + np.exp((T - F) / S))
+
+
 class SocialMediaAgent(AgentBase):
     """
     An agent in a social media.
@@ -292,6 +310,7 @@ class SocialMediaAgent(AgentBase):
     ) -> None:
         name = settings.get("name", None)
         gender = settings.get("sex", None)
+        self.fatigue = INIT_FATIGUE
         sys_prompt = (
             f"""## 角色名称\n{name}\n\n"""
             f"""## 性别\n{gender}\n\n"""
@@ -337,23 +356,47 @@ class SocialMediaAgent(AgentBase):
                 return True, hint
             return False, ""
 
-    def _want_to_speak(self, hint: str) -> bool:
+    def _want_to_speak(self, hint: str, **kwargs) -> bool:
         """Check whether the agent want to speak currently"""
-        prompt = self.model.format(
-            Msg(name="system", role="system", content=hint),
-            Msg(
-                name="user",
-                role="user",
-                content="基于以上的朋友圈内容，决定是否要发送一条新的朋友圈。"
-                "如果不发送则返回 **否**，否则返回 **是**。",
-            ),
-        )
-        response = self.model(
-            prompt,
-            max_retries=3,
-        ).text
-        logger.info(f"[SPEAK OR NOT] {self.name}: {response}")
-        return "yes" in response.lower()
+
+        current_time = kwargs.get("current_time", "")
+        is_daytime_sign = is_daytime(current_time)
+
+        if is_daytime_sign:
+            self.fatigue += 5 / 18
+        else:
+            self.f += 1 / 18
+
+        probability = compute_probability(self.fatigue)
+        if np.random.rand() < probability:
+            if is_daytime_sign:
+                # Daytime
+                self.fatigue -= 0.5
+            else:
+                # Nighttime
+                self.fatigue -= 2.0
+            # Avoid negative value
+            if self.fatigue < 0:
+                self.fatigue = 0
+            return True
+        else:
+            return False
+
+        # prompt = self.model.format(
+        #     Msg(name="system", role="system", content=hint),
+        #     Msg(
+        #         name="user",
+        #         role="user",
+        #         content="基于以上的朋友圈内容，决定是否要发送一条新的朋友圈。"
+        #         "如果不发送则返回 **否**，否则返回 **是**。",
+        #     ),
+        # )
+        # response = self.model(
+        #     prompt,
+        #     max_retries=3,
+        # ).text
+        # logger.info(f"[SPEAK OR NOT] {self.name}: {response}")
+        # return "yes" in response.lower()
 
     def speak(
         self,
@@ -395,8 +438,11 @@ class SocialMediaAgent(AgentBase):
             raise ResponseParsingError("回复超长: " + response.text + f" len(text) = {len(response.text)}")
         minutes = random.randint(0, 59)
         seconds = random.randint(0, 59)
-        time = current_time + datetime.timedelta(minutes=minutes, seconds=seconds)
-        time_str = time.strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = current_time + datetime.timedelta(
+            minutes=minutes,
+            seconds=seconds,
+        )
+        time_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
         parsed = {
             'timestamp': time_str,
             'content': response.text,
@@ -412,7 +458,9 @@ class SocialMediaAgent(AgentBase):
             reply_hint = f'{mentioned_hint}\n{self.name}:'
         else:
             # decide whether to speak
-            # if len(recent_posts) == 0 or self._want_to_speak(media_info):
+            if len(recent_posts) == 0 or (
+                self._want_to_speak(media_info, current_time=current_time)
+            ):
                 reply_hint = (
                     r"请基于以上的朋友圈内容，生成一条合适的朋友圈。生成要求如下：\n"
                     rf"1. 现在的时间是{current_time}，生成内容的时间需要发生在未来一小时以内，不得出现不合理的内容，比如上午8点时生成“下午好”或“晚上好”等内容，生成内容无需包含具体时间。\n"
@@ -425,8 +473,8 @@ class SocialMediaAgent(AgentBase):
                     # r"时间：yyyy-MM-dd HH:mm:ss\n"
                     # r"内容：(符合人设的朋友圈文本)\n"
                 )
-            # else:
-            #     return Msg(name="assistant", role="assistant", content="")
+            else:
+                return Msg(name="assistant", role="assistant", content="")
         system_hint = (
             f"{self.sys_prompt}\n你正在浏览下面的朋友圈：\n"
             f"\n{media_info}\n{reply_hint}"
