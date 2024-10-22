@@ -36,7 +36,10 @@ from agentscope.web.gradio.utils import user_input
 SOCIAL_MEDIA_TEMPLATE = """
 ======= 朋友圈 开始 ========
 
-## 最新动态:
+## 最新热搜：
+{hot_news}
+
+## 最新动态：
 {history}
 
 ======= 朋友圈 结束 ========
@@ -71,8 +74,8 @@ class SocialMediaMember(BasicEnv):
         """Get the agent of the member."""
         return self._agent
 
-    def generate_post(self, recent_posts: List[Msg] = [], current_time: str = "") -> Msg:
-        msg = self._agent(recent_posts, current_time)
+    def generate_post(self, recent_posts: List[Msg] = [], recent_news: List[str] = [], current_time: str = "") -> Msg:
+        msg = self._agent(recent_posts, recent_news, current_time)
         return msg
 
 
@@ -157,7 +160,7 @@ class SocialMedia(BasicEnv):
             history_idx = self.children[agent_name].history_idx
         return deepcopy([msg for msg in self.history[history_idx:] if msg.name == agent_name])
 
-    def describe(self, agent_name: str, recent_posts: List[Msg] = []) -> str:
+    def describe(self, agent_name: str, recent_posts: List[Msg] = [], recent_news: List[str] = []) -> str:
         """Get the description of the social media."""
 
         history = "\n\n".join(
@@ -166,8 +169,10 @@ class SocialMedia(BasicEnv):
                 for msg in (recent_posts + self.get_history(agent_name=agent_name))
             ]
         )
+        hot_news = "\n\n".join(recent_news)
         return SOCIAL_MEDIA_TEMPLATE.format(
             history=history,
+            hot_news=hot_news,
         )
 
     @event_func
@@ -221,6 +226,7 @@ class SocialMedia(BasicEnv):
     def generate_post(
         self,
         recent_posts: List[Msg] = [],
+        recent_news: List[str] = [],
         current_time: str = "",
         **kwargs: Any,
     ) -> List[Msg]:
@@ -230,7 +236,8 @@ class SocialMedia(BasicEnv):
                 executor.submit(
                     self.children[agent_name].generate_post,
                     recent_posts=recent_posts,
-                    current_time=current_time
+                    recent_news=recent_news,
+                    current_time=current_time,
                 )
                 for agent_name in self.children.keys()
             ]
@@ -241,6 +248,7 @@ class SocialMedia(BasicEnv):
         self,
         agent_name_order: List[str] = None,
         recent_posts: List[Msg] = [],
+        recent_news: List[str] = [],
         current_time: str = "",
     ) -> List[Msg]:
         """Let all agents generate posts in sequence
@@ -254,7 +262,7 @@ class SocialMedia(BasicEnv):
             ]
         result = []
         for agent_name in agent_name_order:
-            result.append(self.children[agent_name].generate_post(recent_posts, current_time))
+            result.append(self.children[agent_name].generate_post(recent_posts, recent_news, current_time))
         return result
 
 
@@ -450,9 +458,9 @@ class SocialMediaAgent(AgentBase):
         }
         return ModelResponse(text=response.text, parsed=parsed)
 
-    def reply(self, recent_posts: List[Msg] = [], current_time: str = "") -> Msg:
+    def reply(self, recent_posts: List[Msg] = [], recent_news: List[str] = [], current_time: str = "") -> Msg:
         """Generate reply to chat media"""
-        media_info = self.media.describe(self.name, recent_posts)
+        media_info = self.media.describe(self.name, recent_posts, recent_news)
         reply_hint = ''
         mentioned, mentioned_hint = self._generate_mentioned_prompt()
         if mentioned:
