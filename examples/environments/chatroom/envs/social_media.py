@@ -153,16 +153,16 @@ class SocialMedia(BasicEnv):
             history_idx = 0
         else:
             history_idx = self.children[agent_name].history_idx
-        return deepcopy(self.history[history_idx:])
+        return deepcopy([msg for msg in self.history[history_idx:] if msg.name == agent_name])
 
-    def describe(self, recent_posts: List[Msg] = []) -> str:
+    def describe(self, agent_name: str, recent_posts: List[Msg] = []) -> str:
         """Get the description of the social media."""
 
         history = "\n\n".join(
             [
                 f"{msg.name}({msg.content['timestamp']}): {msg.content['content']}"
-                for msg in recent_posts
-            ],
+                for msg in (recent_posts + self.get_history(agent_name=agent_name))
+            ]
         )
         return SOCIAL_MEDIA_TEMPLATE.format(
             history=history,
@@ -293,6 +293,7 @@ class SocialMediaAgent(AgentBase):
         name = settings.get("name", None)
         gender = settings.get("sex", None)
         sys_prompt = (
+            f"""你正在扮演{name}，请以他（她）的身份回答问题，以下是他（她）的角色描述。\n\n"""
             f"""## 角色名称\n{name}\n\n"""
             f"""## 性别\n{gender}\n\n"""
             f"""## 角色介绍\n{settings.get('description', '')}\n\n"""
@@ -405,7 +406,7 @@ class SocialMediaAgent(AgentBase):
 
     def reply(self, recent_posts: List[Msg] = [], current_time: str = "") -> Msg:
         """Generate reply to chat media"""
-        media_info = self.media.describe(recent_posts)
+        media_info = self.media.describe(self.name, recent_posts)
         reply_hint = ''
         mentioned, mentioned_hint = self._generate_mentioned_prompt()
         if mentioned:
@@ -414,16 +415,16 @@ class SocialMediaAgent(AgentBase):
             # decide whether to speak
             # if len(recent_posts) == 0 or self._want_to_speak(media_info):
                 reply_hint = (
-                    r"请基于以上的朋友圈内容，生成一条合适的朋友圈。生成要求如下：\n"
-                    rf"1. 现在的时间是{current_time}，生成内容的时间需要发生在未来一小时以内，不得出现不合理的内容，比如上午8点时生成“下午好”或“晚上好”等内容，生成内容无需包含具体时间。\n"
-                    r"2. 朋友圈内容需要符合人设，且符合当前朋友圈内容。\n"
-                    r"3. 生成内容需要像日常聊天那样保持口语化、自然、流畅、简略，讲大白话。\n"
-                    r"4. 回复禁止超过140字，讨论请围绕主题，接地气，可以加入适当的语气词表达情感。\n"
-                    r"5. 尽可能地避免使用特殊符号，例如：#、&、~等。\n"
-                    r"请生成一条符合要求的朋友圈：\n"
-                    # r"6. 请按照下面的格式进行生成：\n"
-                    # r"时间：yyyy-MM-dd HH:mm:ss\n"
-                    # r"内容：(符合人设的朋友圈文本)\n"
+                    "请基于以上的朋友圈内容，生成一条合适的朋友圈。生成要求如下：\n"
+                    f"1. 现在的时间是{current_time}，生成内容的时间需要发生在未来一小时以内，不得出现不合理的内容，比如上午8点时生成“下午好”或“晚上好”等内容，生成内容无需包含具体时间。\n"
+                    "2. 朋友圈内容需要符合人设，且符合当前朋友圈内容。\n"
+                    "3. 生成内容需要像日常聊天那样保持口语化、自然、流畅、简略，讲大白话。\n"
+                    "4. 回复禁止超过140字，讨论请围绕主题，接地气，可以加入适当的语气词表达情感。\n"
+                    "5. 尽可能地避免使用特殊符号，例如：#、&、~等。\n"
+                    "请生成一条符合要求的朋友圈：\n"
+                    # "6. 请按照下面的格式进行生成：\n"
+                    # "时间：yyyy-MM-dd HH:mm:ss\n"
+                    # "内容：(符合人设的朋友圈文本)\n"
                 )
             # else:
             #     return Msg(name="assistant", role="assistant", content="")
@@ -439,7 +440,7 @@ class SocialMediaAgent(AgentBase):
             )
         )
         prompt[-1]["content"] = prompt[-1]["content"].strip()
-        logger.debug(prompt)
+        logger.info(prompt)
         current_time = datetime.datetime.strptime(current_time, "%Y-%m-%d %H:%M:%S")
         response = self.model(
             prompt,
