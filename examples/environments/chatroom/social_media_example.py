@@ -59,6 +59,10 @@ def main(args: argparse.Namespace) -> None:
             "config_name": "dash",
             "model_name": "qwen-max",
             "api_key": os.environ.get("DASH_API_KEY", ""),
+            "generate_args": {
+                "temperature": 1.8,
+                "max_tokens": 300,
+            }
         },
     ]
 
@@ -84,6 +88,8 @@ def main(args: argparse.Namespace) -> None:
     with open('chatroom/sub_persona.json', 'r') as f:
         for line in f.readlines():
             persona = json.loads(line)
+            if not persona['personality'].startswith('日常-') and persona['personality'] != '专家':
+                persona['personality'] = '日常-' + persona['personality']
             name2persona[persona['name']] = persona
             member = SocialMediaAgent(
                 settings=persona,
@@ -120,7 +126,8 @@ def main(args: argparse.Namespace) -> None:
     result_dict = {}
     news_num = len(recent_news) // len(time_list)
     for i, current_time in enumerate(time_list):
-        news = list(np.random.choice(recent_news[i * news_num: (i + 1) * news_num], np.ceil(news_num / 2), replace=False))
+        # news = list(np.random.choice(recent_news[i * news_num: (i + 1) * news_num], np.ceil(news_num / 2), replace=False))
+        news = recent_news[i * news_num: (i + 1) * news_num]
         result = r.generate_post_in_sequence(
             recent_posts=recent_posts,
             recent_news=news, # recent_news[i * news_num: (i + 1) * news_num],

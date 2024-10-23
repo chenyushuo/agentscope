@@ -2,10 +2,11 @@
 """An env used as a social media."""
 from typing import List, Any, Union, Generator, Tuple, Optional
 from copy import deepcopy
+import os
 import re
 import random
 import threading
-import time
+import json
 from loguru import logger
 import concurrent.futures
 # from datetime import datetime, timedelta
@@ -44,6 +45,13 @@ SOCIAL_MEDIA_TEMPLATE = """
 
 ======= 朋友圈 结束 ========
 """
+
+current_file_path = os.path.abspath(__file__)
+current_directory = os.path.dirname(current_file_path)
+parent_directory = os.path.dirname(current_directory)
+icl_path = os.path.join(parent_directory, "social_media_ICL_example.json")
+with open(icl_path, 'r') as f:
+    icl_example = json.load(f)
 
 
 class SocialMediaMember(BasicEnv):
@@ -169,6 +177,8 @@ class SocialMedia(BasicEnv):
                 for msg in (recent_posts + self.get_history(agent_name=agent_name))
             ]
         )
+        if len(history) == 0:
+            history = "暂无动态"
         hot_news = "\n\n".join(recent_news)
         return SOCIAL_MEDIA_TEMPLATE.format(
             history=history,
@@ -318,6 +328,8 @@ class SocialMediaAgent(AgentBase):
     ) -> None:
         name = settings.get("name", None)
         gender = settings.get("sex", None)
+        personality = settings.get("personality", None)
+        self.personality = personality
         self.fatigue = INIT_FATIGUE
         sys_prompt = (
             f"""你正在扮演{name}，请以他（她）的身份回答问题，以下是他（她）的角色描述。\n\n"""
@@ -467,9 +479,12 @@ class SocialMediaAgent(AgentBase):
             reply_hint = f'{mentioned_hint}\n{self.name}:'
         else:
             # decide whether to speak
-            if len(recent_posts) == 0 or (
-                self._want_to_speak(media_info, current_time=current_time)
-            ):
+            # if len(recent_posts) == 0 or (
+            #     self._want_to_speak(media_info, current_time=current_time)
+            # ):
+                example = list(icl_example[self.personality].values())
+                example = np.random.choice(example, len(example) // 2, replace=False)
+                example_str = "\n\n".join(example)
                 reply_hint = (
                     "请基于以上的朋友圈内容，生成一条合适的朋友圈。生成要求如下：\n"
                     f"1. 现在的时间是{current_time}，生成内容的时间需要发生在未来一小时以内，不得出现不合理的内容，比如上午8点时生成“下午好”或“晚上好”等内容，生成内容无需包含具体时间。\n"
@@ -477,13 +492,16 @@ class SocialMediaAgent(AgentBase):
                     "3. 生成内容需要像日常聊天那样保持口语化、自然、流畅、简略，讲大白话。\n"
                     "4. 回复禁止超过140字，讨论请围绕主题，接地气，可以加入适当的语气词表达情感。\n"
                     "5. 尽可能地避免使用特殊符号，例如：#、&、~等。\n"
+                    "6. 生成的内容尽可能与上面展示的朋友圈不同，生成的内容不一定要与新闻相关。\n"
+                    "7. 以下是若干生成样例：\n"
+                    f"{example_str}\n\n"
                     "请生成一条符合要求的朋友圈：\n"
                     # "6. 请按照下面的格式进行生成：\n"
                     # "时间：yyyy-MM-dd HH:mm:ss\n"
                     # "内容：(符合人设的朋友圈文本)\n"
                 )
-            else:
-                return Msg(name="assistant", role="assistant", content="")
+            # else:
+            #     return Msg(name="assistant", role="assistant", content="")
         system_hint = (
             f"{self.sys_prompt}\n你正在浏览下面的朋友圈：\n"
             f"\n{media_info}\n{reply_hint}"
@@ -498,11 +516,15 @@ class SocialMediaAgent(AgentBase):
         prompt[-1]["content"] = prompt[-1]["content"].strip()
         logger.info(prompt)
         current_time = datetime.datetime.strptime(current_time, "%Y-%m-%d %H:%M:%S")
-        response = self.model(
-            prompt,
-            parse_func=partial(self.parse_func, current_time),
-            max_retries=5,
-        )
+        try:
+            response = self.model(
+                prompt,
+                parse_func=partial(self.parse_func, current_time),
+                max_retries=5,
+            )
+        except Exception as e:
+            logger.error(e)
+            return Msg(name="assistant", role="assistant", content="")
         msg = Msg(name=self.name, content=response.parsed, role="assistant")
         if response:
             self.speak(msg)
